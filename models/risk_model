@@ -1,0 +1,92 @@
+# create_model.py
+import sys
+from pathlib import Path
+import pandas as pd
+
+# Minimal deps check
+try:
+    from sklearn.tree import DecisionTreeClassifier
+    import joblib
+except Exception as e:
+    print("ERROR: scikit-learn and/or joblib not installed.")
+    print("Install with: pip install scikit-learn joblib pandas")
+    sys.exit(1)
+
+# Paths (relative to REPO ROOT)
+DATA_PATH = Path("data/trails_sample.csv")
+MODEL_PATH = Path("models/risk_model.pkl")
+
+FEATURES = [
+    "distance_km",
+    "elevation_gain_m",
+    "max_altitude_m",
+    "min_temperature_c",
+    "exposed_ridge",
+    "slippery_surface",
+    "estimated_duration_h",
+]
+TARGET = "difficulty_label"  # expected values: green/yellow/red
+
+def fail(msg: str):
+    print(f"ERROR: {msg}")
+    sys.exit(1)
+
+def main():
+    print("== HikeSafe model builder ==")
+    print(f"Working directory: {Path.cwd()}")
+    print(f"Expecting CSV at: {DATA_PATH.resolve()}")
+    if not DATA_PATH.exists():
+        fail("CSV not found. Ensure you are running from the repo root and that data/trails_sample.csv exists.")
+
+    # Read data
+    try:
+        df = pd.read_csv(DATA_PATH)
+    except Exception as e:
+        fail(f"Could not read CSV: {e}")
+
+    missing = [c for c in FEATURES + [TARGET] if c not in df.columns]
+    if missing:
+        fail(f"CSV missing required columns: {missing}\n"
+             f"Found columns: {list(df.columns)}")
+
+    # Coerce dtypes
+    numeric_cols = [
+        "distance_km", "elevation_gain_m", "max_altitude_m",
+        "min_temperature_c", "estimated_duration_h"
+    ]
+    for c in numeric_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Binary flags may be strings; coerce to 0/1
+    for c in ["exposed_ridge", "slippery_surface"]:
+        if df[c].dtype == object:
+            df[c] = (
+                df[c].astype(str).str.strip().str.lower()
+                .replace({"true": "1", "false": "0", "yes": "1", "no": "0"})
+            )
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+
+    # Drop rows with any missing numeric values after coercion
+    before = len(df)
+    df = df.dropna(subset=numeric_cols)
+    after = len(df)
+    if after == 0:
+        fail("All rows became NaN after coercion; check your CSV values.")
+    if after < before:
+        print(f"Info: Dropped {before - after} rows with NaNs.")
+
+    X = df[FEATURES]
+    y = df[TARGET].astype(str).str.strip().str.lower()
+
+    print("Training DecisionTreeClassifier...")
+    model = DecisionTreeClassifier(max_depth=4, random_state=42)
+    model.fit(X, y)
+
+    # Ensure output folder exists
+    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    joblib.dump(model, MODEL_PATH)
+    print(f"✅ Model saved to {MODEL_PATH.resolve()}")
+
+if __name__ == "__main__":
+    main()
